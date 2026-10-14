@@ -13,9 +13,14 @@ it holds the code and state that `mod-hearthside-city` (City Life), `mod-hearths
 | `LifeArrival.h` | Out-of-sight drop-off, sight check, walk-off |
 | `LifeMedic.h` | Healers tend finished duels |
 | `LifePresence.h` | Real-player snapshot, mod-playerbots wake rule |
+| `LifeArchetypes.h` | Archetype lookup that mod-hearthside-chat fills; without it every bot fits |
+| `LifeActivity.h` | Busy marks: bots cast in a Chat conversation, left alone until it ends |
 
-The shared state (the reservation registry and the level holds) is defined once, in
-`src/LifeRegistry.cpp`.
+The shared state (the reservation registry, the level holds, the archetype provider and the busy
+marks) is defined once, in `src/LifeRegistry.cpp`.
+
+`mod-hearthside-chat` plugs in when it is installed: it registers the archetype provider and marks
+the bots it casts in a conversation. City and PvP never include Chat's headers.
 
 ## Installation
 

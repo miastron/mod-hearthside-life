@@ -10,8 +10,8 @@
 // - IsBotSession / IsHumanPlayer / IsHumanControlled: this core has no WorldSession::IsBot(), and
 //   mod-playerbots attaches its AI after OnPlayerLogin, so ::IsRealPlayer() alone reads every bot
 //   logging in as a human.
-// - ArchetypeFilter: <prefix>.Bots.Archetypes, using mod-hearthside-chat's GUID-fixed personality when
-//   that module is in the build; without it every bot fits.
+// - ArchetypeFilter: <prefix>.Bots.Archetypes, using mod-hearthside-chat's GUID-fixed personality
+//   through LifeArchetypes; with no provider (Chat absent or switched off) every bot fits.
 // - Budget / CountLiveWorldBots: how many bots a module may hold.
 // - StrategyJournal: records exactly what a module changed (strategies, "stay" position, PvP flag) so
 //   Restore undoes only that and leaves whatever else changed meanwhile.
@@ -30,12 +30,8 @@
 #include "RandomPlayerbotMgr.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
+#include "LifeArchetypes.h"
 #include "LifeBotReservation.h"
-
-#if __has_include("hs_archetype.h")
-#include "hs_archetype.h"
-#define LIFEBOTS_HAS_ARCHETYPES 1
-#endif
 
 #include <algorithm>
 #include <cctype>
@@ -193,50 +189,70 @@ namespace LifeBots
     {
     public:
         // Reads `key` (comma-separated mod-hearthside-chat archetype names) and logs what is wrong with
-        // it, on every load so a bad value is reported every time.
+        // it, on every load so a bad value is reported every time. With no provider yet the names are
+        // parsed (and checked) once one registers.
         void Load(std::string const& key, char const* tag, std::string const& fallback = "")
         {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _key = key;
+            _tag = tag;
             _list = sConfigMgr->GetOption<std::string>(key, fallback);
-            _active = false;
+            _set = _list.find_first_not_of(" 	,;") != std::string::npos;
             _mask = 0;
-            if (_list.find_first_not_of(" \t,;") == std::string::npos)
-                return;
-#ifdef LIFEBOTS_HAS_ARCHETYPES
-            _active = true;
-            std::vector<std::string> unknown;
-            _mask = Hs_ArchetypeMaskForNames(_list, unknown);
-            for (std::string const& name : unknown)
-                LOG_ERROR("module", "[{}] {}: unknown archetype '{}', ignored.", tag, key, name);
-            if (!_mask)
-                LOG_ERROR("module", "[{}] {} = \"{}\" names no known archetype: no bot will be borrowed until it is fixed or emptied.",
-                    tag, key, _list);
-#else
-            LOG_WARN("module", "[{}] {} is set but mod-hearthside-chat (hs_archetype.h) is not in this build: "
-                "the archetype filter is ignored and every bot may be borrowed.", tag, key);
-#endif
+            _parsedGeneration = 0;
+            if (_set && !ParseLocked())
+                LOG_WARN("module", "[{}] {} is set but no archetype provider (mod-hearthside-chat) is registered: "
+                    "the archetype filter is ignored and every bot may be borrowed.", _tag, _key);
         }
 
-        // True if the list is empty, the chat module is not in the build, or the bot's archetype is listed.
+        // True if the list is empty, no provider is available (Chat absent or switched off), or the
+        // bot's archetype is listed.
         bool Fits(uint32 guidLow) const
         {
-#ifdef LIFEBOTS_HAS_ARCHETYPES
-            if (!_active)
+            if (!_set || !LifeArchetypes::Available())
                 return true;
-            uint64 raw = ObjectGuid::Create<HighGuid::Player>(guidLow).GetRawValue();
-            uint32 archetype = static_cast<uint32>(Hs_ArchetypeForBot(raw));
-            return archetype < 32 && (_mask & (1u << archetype)) != 0;
-#else
-            (void)guidLow;
-            return true;
-#endif
+            uint32 mask;
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                if (_parsedGeneration != LifeArchetypes::Generation())
+                    ParseLocked();
+                mask = _mask;
+            }
+            int archetype = LifeArchetypes::ForBot(ObjectGuid::Create<HighGuid::Player>(guidLow).GetRawValue());
+            return archetype >= 0 && archetype < 32 && (mask & (1u << archetype)) != 0;
         }
 
-        std::string const& List() const { return _list; }
+        std::string List() const
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            return _list;
+        }
 
     private:
+        // False without a provider. Logs unknown names, and a list that names nothing known.
+        bool ParseLocked() const
+        {
+            uint32 generation = LifeArchetypes::Generation();
+            if (!generation)
+                return false;
+            _parsedGeneration = generation;
+            std::vector<std::string> unknown;
+            _mask = LifeArchetypes::MaskForNames(_list, unknown);
+            for (std::string const& name : unknown)
+                LOG_ERROR("module", "[{}] {}: unknown archetype '{}', ignored.", _tag, _key, name);
+            if (!_mask)
+                LOG_ERROR("module", "[{}] {} = \"{}\" names no known archetype: no bot will be borrowed until it is fixed or emptied.",
+                    _tag, _key, _list);
+            return true;
+        }
+
+        mutable std::mutex _mutex;
+        std::string _key;
+        std::string _tag;
         std::string _list;
-        bool _active = false;
-        uint32 _mask = 0; // with _active, 0 = no bot fits
+        bool _set = false;                     // the list names something
+        mutable uint32 _mask = 0;              // once parsed, 0 = no bot fits
+        mutable uint32 _parsedGeneration = 0;  // LifeArchetypes::Generation() it was parsed against
     };
 
     // <prefix>.Population.BudgetMode: "percentage" of the live bots, or a "count" ("fixed") of them;
