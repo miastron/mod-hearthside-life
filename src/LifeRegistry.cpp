@@ -9,6 +9,7 @@
 #include "LifeBotReservation.h"
 #include "LifeBots.h"
 #include "LifeEvents.h"
+#include "LifeLevels.h"
 
 #include "Log.h"
 
@@ -30,7 +31,7 @@ namespace PlayerbotsLife
 
 namespace LifeBots
 {
-    void HoldLevels(PlayerbotsLife::ReservationOwner owner, std::unordered_set<std::string> const& names)
+    void HoldLevelsFor(std::uint8_t holder, std::unordered_set<std::string> const& names)
     {
         struct Registry
         {
@@ -38,7 +39,7 @@ namespace LifeBots
             std::unordered_set<std::string> Added;
         };
         static Registry registry;
-        registry.Held[static_cast<uint8>(owner)] = names;
+        registry.Held[holder] = names;
 
         std::unordered_set<std::string> held;
         for (auto const& [holder, set] : registry.Held)

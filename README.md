@@ -16,12 +16,14 @@ it holds the code and state that `mod-hearthside-city` (City Life), `mod-hearths
 | `LifeArchetypes.h` | Archetype lookup that mod-hearthside-chat fills; without it every bot fits |
 | `LifeActivity.h` | Busy marks: bots cast in a Chat conversation, left alone until it ends |
 | `LifeEvents.h` | Event channel: City and PvP publish plain facts, Chat listens |
+| `LifeLevels.h` | Level holds: the union of every holder's bots stays off mod-playerbots' re-leveling |
 
 The shared state (the reservation registry, the level holds, the archetype provider and the busy
 marks) is defined once, in `src/LifeRegistry.cpp`.
 
 `mod-hearthside-chat` plugs in when it is installed: it registers the archetype provider and the
-event listener, and marks the bots it casts in a conversation. City and PvP never include Chat's
+event listener, marks the bots it casts in a conversation, and holds its carded bots' levels as a
+third holder beside City and PvP. City and PvP never include Chat's
 headers. With no listener, publishing an event does nothing.
 
 | Event | Sent by | When |

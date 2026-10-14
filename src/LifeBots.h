@@ -32,6 +32,7 @@
 #include "WorldSession.h"
 #include "LifeArchetypes.h"
 #include "LifeBotReservation.h"
+#include "LifeLevels.h"
 
 #include <algorithm>
 #include <cctype>
@@ -446,11 +447,12 @@ namespace LifeBots
 
     // mod-playerbots' level brackets re-level a random bot in place (realm 2026-10-12: a leased level 9
     // dinged to 63 mid-duel-event). Each Life module hands over the names of the bots it holds now, every
-    // management tick and an empty set at shutdown; their union is kept on mod-playerbots' exclude
-    // lists. Those lists are by name and mod-hearthside-chat writes them too, so only names a Life
-    // module put there are ever taken back off. One registry for the process, defined in
-    // LifeRegistry.cpp. World thread only.
-    void HoldLevels(PlayerbotsLife::ReservationOwner owner, std::unordered_set<std::string> const& names);
+    // management tick and an empty set at shutdown (LifeLevels.h has the rules; mod-hearthside-chat
+    // holds its carded bots there too). World thread only.
+    inline void HoldLevels(PlayerbotsLife::ReservationOwner owner, std::unordered_set<std::string> const& names)
+    {
+        HoldLevelsFor(static_cast<std::uint8_t>(owner), names);
+    }
 }
 
 #endif
