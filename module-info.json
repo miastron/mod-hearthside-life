@@ -1,0 +1,9 @@
+{
+  "name": "mod-hearthside-life",
+  "displayName": "Hearthside Life",
+  "description": "Shared code and state for the Hearthside Life modules (City, PvP, Artisans) and their bridge to Hearthside Chat.",
+  "author": "miastron",
+  "license": "GPL-2.0-or-later",
+  "target_core": "mod-playerbots/azerothcore-wotlk Playerbot branch",
+  "target_module": "mod-playerbots master"
+}
