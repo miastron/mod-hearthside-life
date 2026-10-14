@@ -199,9 +199,12 @@ Five phases, each with its own commits and realm build. Every install and restar
 | Chat's standalone `Tests/` break | Life is only included from Chat's AzerothCore-facing files, never from the pure-logic ones the tests compile |
 | Removing speech changes a server that had City or PvP chat switched on | Only operators who enabled those off-by-default keys notice; called out in both READMEs |
 
-## Open questions
+## Decisions (2026-10-14)
 
-- [ ] Create the `miastron/mod-hearthside-life` repo on GitHub (or say where it should live).
-- [ ] Should Life take an operator-facing conf now (for example a single `Life.Audit.Directory`), or stay settings-free until it needs one?
-- [ ] `pvp_life_chat`: drop the table in SQL, or leave it in the database unused?
-- [ ] Is a `CrowdPair` offer enough for City's crowds? Or should Chat also be able to ask Life for "two idle residents near this player" when its own scan comes up empty?
+- [x] Repo: `miastron/mod-hearthside-life`.
+- [x] Life stays settings-free until it needs a setting.
+- [x] `pvp_life_chat` is dropped by PvP's base SQL.
+- [x] A `CrowdPair` offer is enough for now; "Chat asks Life for two idle residents" waits until Chat's own scan is seen coming up empty.
+- [x] Chat gets `HearthsideChat.Life.Enable` (default 1): off, City and PvP act as if Chat were not installed, so the phase 2 "without Chat" check needs no second build.
+- [x] Bot detection (phase 5, optional) is not delegated: Life's `IsBotSession` needs a module's account filter, and Life has no settings of its own to hold one.
+- [x] CrowdPair goes to the /say script runner only. The bot-to-bot chain (`hs_botchain.cpp`) is a party/raid/General mechanism seeded by a delivered line, not a /say pair.
