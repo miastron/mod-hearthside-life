@@ -254,7 +254,7 @@ namespace LifeMotion
         Dance,         // the /dance state, held
         HopBackForth,  // hop forward and back: backpedalling, or turning round between hops
         HopSideToSide, // strafe hops, facing fixed
-        BunnyHop,      // hop after hop round a circle, a figure 8 or a zigzag
+        BunnyHop,      // hop after hop on a meandering line, round a loose circle, a figure 8 or a zigzag
         HopDismount,   // a mounted arrival hops and gets off in mid-air (not a timed antic)
     };
 
@@ -321,17 +321,24 @@ namespace LifeMotion
         return c;
     }
 
-    // A weighted pick among the timed antics; None if every weight is 0.
-    inline Antic PickAntic(AnticConfig const& c)
+    inline uint8 AnticBit(Antic antic) { return uint8(1u << (uint8(antic) & 7)); }
+
+    // A weighted pick among the timed antics; None if every weight is 0. `avoid` (AnticBit flags)
+    // leaves out what bots close by are already doing, so two neighbours do not hop the same shape
+    // in step; None if that leaves nothing.
+    inline Antic PickAntic(AnticConfig const& c, uint8 avoid = 0)
     {
         uint32 total = 0;
         for (uint8 i = 0; i < TimedAnticCount; ++i)
-            total += c.Weight[i];
+            if (!(avoid & AnticBit(TimedAntic(i))))
+                total += c.Weight[i];
         if (!total)
             return Antic::None;
         uint32 roll = urand(1, total);
         for (uint8 i = 0; i < TimedAnticCount; ++i)
         {
+            if (avoid & AnticBit(TimedAntic(i)))
+                continue;
             if (roll <= c.Weight[i])
                 return TimedAntic(i);
             roll -= c.Weight[i];
@@ -354,7 +361,7 @@ namespace LifeMotion
         uint32 CooldownUntilMs = 0;
         uint32 Step = 0;
         uint8 Misses = 0;   // refused moves in a row; too many ends the antic
-        uint8 Variant = 0;  // HopBackForth: 0 backpedal, 1 turn round; BunnyHop: 0 circle, 1 figure 8, 2 zigzag
+        uint8 Variant = 0;  // HopBackForth: 0 backpedal, 1 turn round; BunnyHop: 0 circle, 1 figure 8, 2 zigzag, 3 meander
         int8 Side = 1;
         bool Dancing = false;
         float AnchorX = 0.0f, AnchorY = 0.0f; // centre of the antic
@@ -420,9 +427,13 @@ namespace LifeMotion
             r.Variant = uint8(urand(0, 1));
         else if (kind == Antic::BunnyHop)
         {
-            r.Variant = uint8(urand(0, 2));
-            r.Size = frand(std::max(3.0f, c.Radius * 0.5f), std::max(3.0f, c.Radius * 0.75f));
-            if (r.Variant == 0)
+            // Mostly a wandering line, the way a player hops about with no plan; now and then a shape.
+            uint32 roll = urand(1, 100);
+            r.Variant = roll <= 45 ? 3 : roll <= 65 ? 0 : roll <= 82 ? 1 : 2;
+            r.Size = frand(std::max(3.0f, c.Radius * 0.5f), std::max(3.0f, c.Radius * 0.85f));
+            if (r.Variant == 3)
+                r.Phase = r.Facing + frand(-0.6f, 0.6f); // heading of the next hop
+            else if (r.Variant == 0)
             {
                 // A circle through where the bot stands: its centre lies Size away.
                 float toCentre = frand(0.0f, 2.0f * float(M_PI));
@@ -473,17 +484,39 @@ namespace LifeMotion
             return Step(bot, r, bound, angle, bot->GetExactDist2d(x, y), true, false, landing);
         }
 
-        // The next point of a BunnyHop shape, about `chord` yards on from the current one.
-        inline void NextShapePoint(Routine& r, float chord, float& x, float& y)
+        // The next point of a BunnyHop shape, about `chord` yards on from the current one. Shapes are
+        // loose, as a player's are: the circle's radius breathes from hop to hop.
+        inline void NextShapePoint(Player* bot, Routine& r, float chord, float& x, float& y)
         {
             float cs = std::cos(r.Facing), sn = std::sin(r.Facing);
             switch (r.Variant)
             {
                 case 0: // circle round the anchor
+                {
                     r.Phase += float(r.Side) * chord / r.Size;
-                    x = r.AnchorX + std::cos(r.Phase) * r.Size;
-                    y = r.AnchorY + std::sin(r.Phase) * r.Size;
+                    float radius = r.Size * frand(0.8f, 1.15f);
+                    x = r.AnchorX + std::cos(r.Phase) * radius;
+                    y = r.AnchorY + std::sin(r.Phase) * radius;
                     return;
+                }
+                case 3: // meander: the heading drifts hop to hop, and bends back toward the anchor near the edge
+                {
+                    float fromX = bot->GetPositionX(), fromY = bot->GetPositionY();
+                    float out = std::hypot(fromX - r.AnchorX, fromY - r.AnchorY);
+                    r.Phase += frand(-0.55f, 0.55f);
+                    if (out > r.Size * 0.6f)
+                    {
+                        float home = std::atan2(r.AnchorY - fromY, r.AnchorX - fromX);
+                        float off = Position::NormalizeOrientation(home - r.Phase);
+                        if (off > float(M_PI))
+                            off -= 2.0f * float(M_PI);
+                        // A gradual bend, not an about-turn: at most ~50 degrees a hop.
+                        r.Phase += std::clamp(off, -0.9f, 0.9f) * frand(0.5f, 1.0f);
+                    }
+                    x = fromX + std::cos(r.Phase) * chord;
+                    y = fromY + std::sin(r.Phase) * chord;
+                    return;
+                }
                 case 1: // figure 8 through the anchor: (S sin t, S sin t cos t) along/across the facing
                 {
                     auto point = [&](float t, float& px, float& py)
@@ -597,7 +630,7 @@ namespace LifeMotion
                 }
                 if (forward)
                 {
-                    r.LastHop = frand(2.5f, 4.0f);
+                    r.LastHop = frand(2.0f, 4.5f);
                     moved = Detail::Step(bot, r, bound, r.Facing, r.LastHop, true, true, landing);
                 }
                 else
@@ -611,29 +644,38 @@ namespace LifeMotion
                     r.Facing = Position::NormalizeOrientation(r.Facing + float(M_PI));
                     bot->SetFacingTo(r.Facing);
                 }
-                pauseMs = urand(100, 350);
+                pauseMs = urand(1, 100) <= 10 ? urand(500, 1500) : urand(80, 450);
                 break;
             }
             case Antic::HopSideToSide:
             {
-                r.Side = int8(-r.Side);
-                float across = r.Facing + float(r.Side) * float(M_PI) / 2.0f;
-                float reach = frand(1.2f, 2.0f);
+                // Mostly alternating, sometimes the same side twice; the line drifts a little too.
+                if (urand(1, 100) <= 80)
+                    r.Side = int8(-r.Side);
+                if (urand(1, 100) <= 25)
+                    r.Facing = Position::NormalizeOrientation(r.Facing + frand(-0.3f, 0.3f));
+                float across = r.Facing + float(r.Side) * float(M_PI) / 2.0f + frand(-0.25f, 0.25f);
+                float reach = frand(1.0f, 2.3f);
                 float tx = r.AnchorX + std::cos(across) * reach;
                 float ty = r.AnchorY + std::sin(across) * reach;
                 float angle = std::atan2(ty - bot->GetPositionY(), tx - bot->GetPositionX());
                 moved = Detail::Step(bot, r, bound, angle, bot->GetExactDist2d(tx, ty), true, true, landing);
-                pauseMs = urand(100, 350);
+                pauseMs = urand(1, 100) <= 10 ? urand(500, 1400) : urand(80, 450);
                 break;
             }
             case Antic::BunnyHop:
             {
                 float x, y;
-                Detail::NextShapePoint(r, frand(3.0f, 4.0f), x, y);
+                Detail::NextShapePoint(bot, r, frand(2.6f, 4.4f), x, y);
                 moved = Detail::HopTo(bot, r, bound, x, y, landing);
                 if (!moved)
+                {
                     r.Side = int8(-r.Side); // blocked: run the shape the other way
-                pauseMs = urand(40, 180);
+                    if (r.Variant == 3)
+                        r.Phase += float(M_PI) * frand(0.6f, 1.0f) * float(r.Side);
+                }
+                // Hop straight on from the landing as a rule, now and then a breather.
+                pauseMs = urand(1, 100) <= 12 ? urand(600, 1800) : urand(30, 220);
                 break;
             }
             default:
