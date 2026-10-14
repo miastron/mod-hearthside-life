@@ -8,10 +8,16 @@
 #include "LifeArchetypes.h"
 #include "LifeBotReservation.h"
 #include "LifeBots.h"
+#include "LifeEvents.h"
+
+#include "Log.h"
 
 #include <chrono>
+#include <exception>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace PlayerbotsLife
 {
@@ -191,5 +197,83 @@ namespace LifeActivity
         for (auto it = marks.Until.begin(); it != marks.Until.end();)
             it = it->second > now ? std::next(it) : marks.Until.erase(it);
         return marks.Until.size();
+    }
+}
+
+namespace LifeEvents
+{
+    namespace
+    {
+        struct Channel
+        {
+            std::mutex Mutex;
+            std::vector<Listener> Listeners;
+            std::unordered_set<std::uint16_t> FaultLogged;
+        };
+
+        Channel& GetChannel()
+        {
+            static Channel channel;
+            return channel;
+        }
+    }
+
+    char const* KindName(Kind kind)
+    {
+        switch (kind)
+        {
+            case Kind::CrowdPair:          return "CrowdPair";
+            case Kind::RaidDefenseStarted: return "RaidDefenseStarted";
+        }
+        return "Unknown";
+    }
+
+    void Listen(Listener listener)
+    {
+        if (!listener)
+            return;
+        Channel& channel = GetChannel();
+        std::lock_guard<std::mutex> lock(channel.Mutex);
+        channel.Listeners.push_back(std::move(listener));
+    }
+
+    void Publish(Event const& event)
+    {
+        Channel& channel = GetChannel();
+        std::vector<Listener> listeners;
+        {
+            std::lock_guard<std::mutex> lock(channel.Mutex);
+            if (channel.Listeners.empty())
+                return;
+            listeners = channel.Listeners;
+        }
+        for (Listener const& listener : listeners)
+        {
+            char const* fault = nullptr;
+            std::string what;
+            try
+            {
+                listener(event);
+            }
+            catch (std::exception const& e)
+            {
+                fault = "exception";
+                what = e.what();
+            }
+            catch (...)
+            {
+                fault = "unknown exception";
+            }
+            if (!fault)
+                continue;
+            bool first;
+            {
+                std::lock_guard<std::mutex> lock(channel.Mutex);
+                first = channel.FaultLogged.insert(static_cast<std::uint16_t>(event.Type)).second;
+            }
+            if (first)
+                LOG_ERROR("module", "[Life] A {} listener threw ({}{}{}); skipped. Further faults for this kind are not logged.",
+                    KindName(event.Type), fault, what.empty() ? "" : ": ", what);
+        }
     }
 }

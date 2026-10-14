@@ -28,12 +28,15 @@ unverified.
 
 - **Shared state lives in `src/LifeRegistry.cpp`,** behind the functions the headers declare
   (`PlayerbotsLife::GetReservationRegistry`, `LifeBots::HoldLevels`, the `LifeArchetypes` provider
-  slot, the `LifeActivity` busy marks). Never add a `static` inside
+  slot, the `LifeActivity` busy marks, the `LifeEvents` listeners). Never add a `static` inside
   an `inline` header function for state the modules share: that only worked while every module
   compiled identical header text.
 - Namespaces (`PlayerbotsLife`, `LifeBots`, `LifeMotion`, `LifeMedic`, `LifePresence`,
   `LifeArrival`, `LifeAudit`) are what City and PvP call; keep them.
-- `LifeArchetypes.h`, `LifeActivity.h` (and later `LifeEvents.h`) carry no AzerothCore types:
+- `LifeEvents.h`: `Kind` values are appended, never renumbered. `Publish` is world-thread only and
+  catches a throwing listener (logged once per kind); listeners must only queue work. Events a
+  listener already sees through its own hooks (duels) are never published here.
+- `LifeArchetypes.h`, `LifeActivity.h` and `LifeEvents.h` carry no AzerothCore types:
   Chat includes them behind `__has_include` from its AzerothCore-facing files. Keep them that way.
 - `LIFE_BOT_RESERVATION_PROTOCOL_VERSION`: bump it on any change to the reservation structs or
   protocol. `CheckProtocolVersion()` is now only a startup sanity check.
