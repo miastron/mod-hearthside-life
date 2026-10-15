@@ -25,6 +25,32 @@ claim you could not exercise as unverified.
 - **A change here changes City and PvP** (they include `../../mod-hearthside-life/src/<header>` and
   `#error` without it): build both.
 
+## Upstream baseline
+
+The single record for all four Hearthside modules (the others point here). Realm builds core
+`mod-playerbots/azerothcore-wotlk` `Playerbot` at `2a2211cd8f3d` and `mod-playerbots/mod-playerbots`
+`master` at `79bd428115c8` (both 2026-10-09; local clones `../azerothcore-wotlk-pb`,
+`../mod-playerbots`).
+
+Each row is the upstream pair that module was last checked against. Moving the realm forward does
+not move a row: bump a module's row only when that module has been checked on the new pair, and say
+how (`build`, or `build + in game`). A row behind the realm is the exact range to review for it.
+**Commit every change to this table in this repo right away** (its own commit; pushing is optional),
+even when nothing else here changed: its git history is the record of past baselines.
+
+| Module | Core | Playerbots | Verified | Date |
+|---|---|---|---|---|
+| life | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
+| chat | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
+| city | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
+| pvp | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
+
+`tools/Get-UpstreamDrift.ps1 [-Module city] [-Commits] [-NoFetch]` (pwsh 7) fetches both clones and,
+per row, counts commits to `origin/` and lists changed upstream files sharing a name with a header
+the module includes (City and PvP inherit Life's), plus mod-playerbots `conf/`. A compile catches
+API breaks for all four at once; the list is for behavior and config changes a compile won't show.
+When a drift breaks something, note it where it bit (City's "Core API drift", Chat's notes).
+
 ## Rules
 
 - **Shared state lives in `src/LifeRegistry.cpp`,** behind the functions the headers declare. Never
