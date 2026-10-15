@@ -24,6 +24,9 @@
 #include "PositionValue.h"
 #include "Random.h"
 #include "SharedDefines.h"
+#include "SpellAuraDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 
 #include <algorithm>
 #include <cctype>
@@ -88,6 +91,10 @@ namespace LifeMotion
     // facing while moving away from it backpedals.
     inline bool Launch(Player* bot, Move const& move, Bound const& bound, Landing* out = nullptr)
     {
+        // A move clears the bot's motion, which must not end a stun, root, fear or knockback early.
+        if (bot->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING) ||
+            bot->GetMotionMaster()->GetMotionSlot(MOTION_SLOT_CONTROLLED))
+            return false;
         float x = move.From.GetPositionX() + std::cos(move.Angle) * move.Distance;
         float y = move.From.GetPositionY() + std::sin(move.Angle) * move.Distance;
         float z = bot->GetPositionZ();
@@ -114,7 +121,8 @@ namespace LifeMotion
                 // MoveJump can only face a unit; a strafe or backward hop holds its own facing.
                 float moveTimeHalf = JumpSpeedZ / ::Movement::gravity;
                 float maxHeight = -::Movement::computeFallElevation(moveTimeHalf, false, -JumpSpeedZ);
-                bot->GetMotionMaster()->MoveIdle();
+                // Drop the chase or point movement first, or its next update relaunches over this spline.
+                bot->GetMotionMaster()->Clear(false);
                 ::Movement::MoveSplineInit init(bot);
                 init.MoveTo(x, y, z);
                 init.SetParabolic(maxHeight, 0);
@@ -142,8 +150,9 @@ namespace LifeMotion
                 sweep = 0.0f;
             }
             uint32 points = std::clamp<uint32>(uint32(step / 1.5f), 2, 8);
+            float startZ = bot->GetPositionZ();
             ::Movement::PointsArray path;
-            path.push_back(G3D::Vector3(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ()));
+            path.push_back(G3D::Vector3(bot->GetPositionX(), bot->GetPositionY(), startZ));
             for (uint32 i = 1; i <= points; ++i)
             {
                 float t = float(i) / float(points);
@@ -151,7 +160,10 @@ namespace LifeMotion
                 float pr = startRadius + (move.Distance - startRadius) * t;
                 float px = i == points ? x : move.From.GetPositionX() + std::cos(pa) * pr;
                 float py = i == points ? y : move.From.GetPositionY() + std::sin(pa) * pr;
-                float pz = i == points ? z : bot->GetPositionZ();
+                // The ground search only looks ~2 yards above where it starts: start each point from
+                // the previous one (or the line to the landing, if higher), so an uphill run climbs
+                // with the slope rather than staying at the start height and stepping up at the end.
+                float pz = i == points ? z : std::max(path.back().z, startZ + (z - startZ) * t);
                 if (i != points)
                     bot->UpdateAllowedPositionZ(px, py, pz);
                 if (std::fabs(pz - path.back().z) > 2.5f)
@@ -159,7 +171,8 @@ namespace LifeMotion
                 path.push_back(G3D::Vector3(px, py, pz));
             }
             // Drop the chase or point movement first, or its next update relaunches over this spline.
-            bot->GetMotionMaster()->MoveIdle();
+            // (MoveIdle would not: it only fills the idle slot under them.)
+            bot->GetMotionMaster()->Clear(false);
             ::Movement::MoveSplineInit init(bot);
             init.MovebyPath(path);
             if (move.Walk)
@@ -201,6 +214,67 @@ namespace LifeMotion
             out->Jumped = jumped;
         }
         return true;
+    }
+
+    // ---------------------------------------------------------------- ground and walking
+
+    // Drops fly movement flags a bot kept after its fly auras went. The core turns flight off by
+    // asking the client, and a bot never answers, so the flags stay: the bot then paths in straight
+    // lines through the air, is never put back on the ground and cannot cast. mod-playerbots'
+    // ClearStaleFlightFlags does the same, but only for a bot with its "mount" strategy, which City
+    // and PvP take away.
+    inline void ClearStaleFlight(Player* bot)
+    {
+        if (!bot || bot->IsInFlight() || bot->HasFlyAura() || bot->HasIncreaseMountedFlightSpeedAura())
+            return;
+        if (!bot->HasUnitMovementFlag(MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_CAN_FLY))
+            return;
+        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_CAN_FLY);
+        if (!bot->IsRooted())
+            bot->SendMovementFlagUpdate();
+    }
+
+    // The fastest ground mount the bot knows, or 0. Never a flying one: a bot on a flying mount
+    // paths in straight lines over the ground and keeps the fly flags afterwards.
+    inline uint32 GroundMountSpell(Player* bot)
+    {
+        uint32 best = 0;
+        int32 bestSpeed = -1;
+        for (auto const& [spellId, spell] : bot->GetSpellMap())
+        {
+            if (!spell || spell->State == PLAYERSPELL_REMOVED || !spell->Active)
+                continue;
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+            if (!info || info->Effects[0].ApplyAuraName != SPELL_AURA_MOUNTED || info->IsPassive() ||
+                info->HasAura(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED) || info->HasAura(SPELL_AURA_FLY) ||
+                spellId == 54729) // Winged Steed of the Ebon Blade: flight only, scaled by script
+                continue;
+            int32 speed = std::max(info->Effects[1].BasePoints, info->Effects[2].BasePoints);
+            if (speed > bestSpeed)
+            {
+                bestSpeed = speed;
+                best = spellId;
+            }
+        }
+        return best;
+    }
+
+    // Sends the bot walking (a pathfinding point move) and tells mod-playerbots, as a NORMAL move
+    // lasting about as long as the walk should. Without that, its "return to stay position" (also
+    // NORMAL) sees the bot away from its stay spot, cancels the walk and plans its own, again every
+    // few seconds: the bot stops, turns and starts over. Its combat moves rank above NORMAL, so a bot
+    // attacked on the way still fights back.
+    inline void WalkTo(Player* bot, float x, float y, float z)
+    {
+        bot->GetMotionMaster()->MovePoint(0, x, y, z);
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(bot))
+        {
+            float speed = std::max(bot->GetSpeed(bot->IsWalking() ? MOVE_WALK : MOVE_RUN), 1.0f);
+            // Paths bend: allow half again the straight distance, and a moment to set off.
+            float ms = bot->GetExactDist(x, y, z) * 1.5f / speed * 1000.0f + 2000.0f;
+            ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get().Set(
+                bot->GetMapId(), x, y, z, bot->GetOrientation(), ms, MovementPriority::MOVEMENT_NORMAL);
+        }
     }
 
     // ---------------------------------------------------------------- hops on the way
@@ -390,6 +464,7 @@ namespace LifeMotion
             bot->Dismount();
             bot->RemoveAurasByType(SPELL_AURA_MOUNTED);
         }
+        ClearStaleFlight(bot);
     }
 
     // Ends the antic and starts the bot's cooldown. A mid-air dismount cut short still dismounts.
