@@ -85,6 +85,17 @@ namespace LifeMotion
         bool Jumped = false;
     };
 
+    // Ends a point move before a move launches over it: it would otherwise take its replaced spline
+    // for arrived, or relaunch its old route on a speed change. A chase is kept: it seldom redirects
+    // a short move (realm 2026-10-15 trace: 84% of footwork lands where launched) and closes back in
+    // as soon as the move ends. Dropping it too left a melee bot standing after every sidestep until
+    // mod-playerbots re-engaged, while its opponent drifted off (out of reach 26% of steps, from 3%).
+    inline void DropPointMove(Player* bot)
+    {
+        if (bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+            bot->GetMotionMaster()->MovementExpired(false);
+    }
+
     // One move: refused (false) if the spot is unreachable, water entered from dry land, a ledge away or outside the bound.
     // A run bends around From in angle and radius (From = the bot's own position runs straight), so
     // circling an opponent follows it and a back-off runs straight out; facing a target or holding a
@@ -121,8 +132,7 @@ namespace LifeMotion
                 // MoveJump can only face a unit; a strafe or backward hop holds its own facing.
                 float moveTimeHalf = JumpSpeedZ / ::Movement::gravity;
                 float maxHeight = -::Movement::computeFallElevation(moveTimeHalf, false, -JumpSpeedZ);
-                // Drop the chase or point movement first, or its next update relaunches over this spline.
-                bot->GetMotionMaster()->Clear(false);
+                DropPointMove(bot);
                 ::Movement::MoveSplineInit init(bot);
                 init.MoveTo(x, y, z);
                 init.SetParabolic(maxHeight, 0);
@@ -170,9 +180,7 @@ namespace LifeMotion
                     return false; // a ledge or a wall mid-curve: skip this move
                 path.push_back(G3D::Vector3(px, py, pz));
             }
-            // Drop the chase or point movement first, or its next update relaunches over this spline.
-            // (MoveIdle would not: it only fills the idle slot under them.)
-            bot->GetMotionMaster()->Clear(false);
+            DropPointMove(bot);
             ::Movement::MoveSplineInit init(bot);
             init.MovebyPath(path);
             if (move.Walk)
