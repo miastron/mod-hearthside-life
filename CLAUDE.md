@@ -44,6 +44,7 @@ even when nothing else here changed: its git history is the record of past basel
 | chat | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
 | city | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
 | pvp | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-15 |
+| npc | `2a2211cd8f3d` | `79bd428115c8` | build | 2026-10-17 |
 
 `tools/Get-UpstreamDrift.ps1 [-Module city] [-Commits] [-NoFetch]` (pwsh 7) fetches both clones and,
 per row, counts commits to `origin/` and lists changed upstream files sharing a name with a header
